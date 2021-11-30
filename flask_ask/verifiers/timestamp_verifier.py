@@ -13,11 +13,15 @@ from .verification_exception import VerificationException
 
 class TimestampVerifier(VerifierInterface):
 
-    def __init__(self):
+    def  __init__(self) -> None:
         self._cert_cache = {}
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def verify(self, request: flask.Request) -> None:
+        """
+        Decodes the POST Body. Looks for a Request object with a ISO-8601 within a timestamp field.
+        Verifies that it wasn't created > 150 seconds ago
+        """
         local_now = datetime.now(tz.tzutc())
 
         raw_body = request.data

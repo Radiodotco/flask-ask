@@ -27,11 +27,12 @@ from . import constants
 
 class RequestVerifier(VerifierInterface):
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._cert_cache = {}
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def verify(self, request: flask.Request) -> None:
+        """ Convert all the headers to lowercase and check for the signature and certificate URL."""
         cert_url = None
         signature = None
         for header_key, header_value in six.iteritems(request.headers):
@@ -43,11 +44,18 @@ class RequestVerifier(VerifierInterface):
         if cert_url is None or signature is None:
             raise VerificationException("Missing Signature/Certificate for the skill request")
 
-        self.logger.debug("Verifying Request. Certificate Url: {}, Signature: {}".format(cert_url, signature))
+        self.logger.debug("Verifying Request. Certificate Url: {}, Signature: {}, Body: {}".format(
+            cert_url, signature, request.data
+        ))
         cert_chain = self._retrieve_certificate_chain(cert_url)
         self._validate_request_body(request, cert_chain, signature)
 
-    def _retrieve_certificate_chain(self, cert_url) -> Certificate:
+    def _retrieve_certificate_chain(self, cert_url: str) -> Certificate:
+        """
+        Validates the Certificate URL.
+        Checks the in-memory cache for it.
+        Fetches and validates the Certificate before storing it if it doesn't already exist.
+        """
         parsed_url = urlparse(cert_url)
 
         protocol = parsed_url.scheme
@@ -57,13 +65,13 @@ class RequestVerifier(VerifierInterface):
 
         hostname = parsed_url.hostname
         if hostname is None or hostname.lower() != constants.CERT_CHAIN_URL_HOSTNAME.lower():
-            raise VerificationException("Signature Certificate URL has invalid Hostname. Expected: {}. Got: {}".format(
+            raise VerificationException("Signature Certificate URL has invalid hostname. Expected: {}. Got: {}".format(
                 constants.CERT_CHAIN_URL_HOSTNAME, hostname
             ))
 
         normalized_path = os.path.normpath(parsed_url.path)
         if not normalized_path.startswith(constants.CERT_CHAIN_URL_STARTPATH):
-            raise VerificationException("Signature Certificate URL Starts with invalid path. Expected: {}. Got: {}".format(
+            raise VerificationException("Signature Certificate URL has invalid path. Expected: {}. Got: {}".format(
                 constants.CERT_CHAIN_URL_STARTPATH, normalized_path
             ))
 
@@ -87,7 +95,11 @@ class RequestVerifier(VerifierInterface):
         self._cert_cache[cert_url] = certificate
         return certificate
 
-    def _validate_certificate_chain(self, certificate_chain: bytes) -> None:
+    @staticmethod
+    def _validate_certificate_chain(certificate_chain: bytes) -> None:
+        """
+        Loads the Certificate chain downloaded from the AWS Provided Header and ensures they're all valid.
+        """
         try:
             end_cert = None
             intermediate_certs = []
@@ -103,7 +115,11 @@ class RequestVerifier(VerifierInterface):
         except (PathError, ValidationError) as e:
             raise VerificationException("Certificate chain is not valid", e)
 
-    def _validate_end_certificate(self, certificate: bytes) -> Certificate:
+    @staticmethod
+    def _validate_end_certificate(certificate: bytes) -> Certificate:
+        """
+        Validates the final certificate ensuring the dates, and the domain is correct.
+        """
         end_cert = load_pem_x509_certificate(data=certificate, backend=default_backend())
         now = datetime.datetime.utcnow()
         if not (end_cert.not_valid_before <= now <=
@@ -121,7 +137,12 @@ class RequestVerifier(VerifierInterface):
                     constants.CERT_CHAIN_DOMAIN))
         return end_cert
 
-    def _validate_request_body(self, request: flask.Request, cert_chain: Certificate, signature: str):
+    def _validate_request_body(self, request: flask.Request, cert_chain: Certificate, signature: str) -> None:
+        """
+        Convert the signature to a byte string.
+        Obtain the public key from the Amazon provided certificate
+        Verify the SHA1(POST Body) matches the signature
+        """
         decoded_signature = base64.b64decode(signature)
         public_key = cert_chain.public_key()  # type: rsa._RSAPublicKey
 
