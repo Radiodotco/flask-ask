@@ -764,8 +764,11 @@ class Ask(object):
         return {}
 
     def _flask_view_func(self, *args, **kwargs):
-        ask_payload = self._alexa_request(verify=self.ask_verify_requests)
-        dbgdump(ask_payload)
+        try:
+            ask_payload = self._alexa_request(verify=self.ask_verify_requests)
+            dbgdump(ask_payload)
+        except Exception:
+            return "", 400
         request_body = models._Field(ask_payload)
 
         self.request = request_body.request
