@@ -767,7 +767,7 @@ class Ask(object):
         try:
             ask_payload = self._alexa_request(verify=self.ask_verify_requests)
             dbgdump(ask_payload)
-        except Exception:
+        except verifier.VerificationError:
             return "", 400
         request_body = models._Field(ask_payload)
 
