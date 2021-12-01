@@ -12,9 +12,10 @@ from werkzeug.local import LocalProxy, LocalStack
 from jinja2 import BaseLoader, ChoiceLoader, TemplateNotFound
 from flask import current_app, json, request as flask_request, _app_ctx_stack
 
-from . import verifier, logger
+from . import logger
 from .convert import to_date, to_time, to_timedelta
 from .cache import top_stream, set_stream
+from .verifiers import RequestVerifier, TimestampVerifier, VerificationException
 import collections
 
 
@@ -97,6 +98,9 @@ class Ask(object):
             self.stream_cache = SimpleCache()
         else:
             self.stream_cache = stream_cache
+        self._verifiers = []
+        self._verifiers.append(RequestVerifier())
+        self._verifiers.append(TimestampVerifier())
 
     def init_app(self, app, path='templates.yaml'):
         """Initializes Ask app by setting configuration variables, loading templates, and maps Ask route to a flask view.
@@ -694,51 +698,9 @@ class Ask(object):
         alexa_request_payload = json.loads(raw_body)
 
         if verify:
-            cert_url = flask_request.headers['Signaturecertchainurl']
-            signature = flask_request.headers['Signature']
-
-            # load certificate - this verifies a the certificate url and format under the hood
-            cert = verifier.load_certificate(cert_url)
-            # verify signature
-            verifier.verify_signature(cert, signature, raw_body)
-
-            # verify timestamp
-            raw_timestamp = alexa_request_payload.get('request', {}).get('timestamp')
-            timestamp = self._parse_timestamp(raw_timestamp)
-
-            if not current_app.debug or self.ask_verify_timestamp_debug:
-                verifier.verify_timestamp(timestamp)
-
-            # verify application id
-            try:
-                application_id = alexa_request_payload['session']['application']['applicationId']
-            except KeyError:
-                application_id = alexa_request_payload['context'][
-                    'System']['application']['applicationId']
-            if self.ask_application_id is not None:
-                verifier.verify_application_id(application_id, self.ask_application_id)
-
+            for verifier in self._verifiers:
+                verifier.verify(flask_request)
         return alexa_request_payload
-
-    @staticmethod
-    def _parse_timestamp(timestamp):
-        """
-        Parse a given timestamp value, raising ValueError if None or Flasey
-        """
-        if timestamp:
-            try:
-                return aniso8601.parse_datetime(timestamp)
-            except AttributeError:
-                # raised by aniso8601 if raw_timestamp is not valid string
-                # in ISO8601 format
-                try:
-                    return datetime.utcfromtimestamp(timestamp)
-                except:
-                    # relax the timestamp a bit in case it was sent in millis
-                    return datetime.utcfromtimestamp(timestamp/1000)
-
-        raise ValueError('Invalid timestamp value! Cannot parse from either ISO8601 string or UTC timestamp.')
-
 
     def _update_stream(self):
         fresh_stream = models._Field()
@@ -764,8 +726,11 @@ class Ask(object):
         return {}
 
     def _flask_view_func(self, *args, **kwargs):
-        ask_payload = self._alexa_request(verify=self.ask_verify_requests)
-        dbgdump(ask_payload)
+        try:
+            ask_payload = self._alexa_request(verify=self.ask_verify_requests)
+            dbgdump(ask_payload)
+        except VerificationException:
+            return "", 400
         request_body = models._Field(ask_payload)
 
         self.request = request_body.request
